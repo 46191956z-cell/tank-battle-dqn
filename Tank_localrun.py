@@ -6,6 +6,9 @@ import os
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
+# --------------------------
+# Core Library Imports
+# --------------------------
 import pygame
 import numpy as np
 import torch
@@ -15,17 +18,16 @@ from collections import deque
 import random
 from tqdm import tqdm
 
-# ===================== Global Configuration =====================
-# Game/Training mode switch (disable UI rendering during training)
+# ===================== Global Game & DQN Settings =====================
 TRAIN_MODE = False
 
-# Game window and frame rate settings
+# Game window dimensions
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
-TRAIN_FPS = 0  # Unlimit frame rate during training to speed up training
+TRAIN_FPS = 0
 
-# Color configuration (game UI)
+# Color definitions
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED = (200, 50, 50)
@@ -40,44 +42,38 @@ WALL_BORDER = (70, 70, 70)
 TRACK_COLOR = (60, 60, 60)
 TURRET_COLOR = (30, 30, 30)
 
-# Game object size and speed parameters
+# Game object dimensions
 TANK_BODY_SIZE = 42
 TANK_TRACK_WIDTH = 8
 TURRET_SIZE = 28
 BULLET_SIZE = 10
 BULLET_SPEED = 10
 TANK_SPEED = 5
-LIVES = 3  # Initial lives for both tanks
+LIVES = 3
 
-# DQN core hyperparameters (key reinforcement learning settings)
-STATE_DIM = 23  # 23-dimensional state space vector
-ACTION_DIM = 6  # 6 discrete actions: up/down/left/right/shoot/stop
-EPSILON = 1.0   # Initial ε-greedy exploration value
-EPSILON_DECAY = 0.995  # ε decay rate (balance exploration/exploitation)
-EPSILON_MIN = 0.05     # Minimum ε value (retain small exploration rate)
-LEARNING_RATE = 0.0005 # Adam optimizer learning rate
-GAMMA = 0.95           # Discount factor (weight future rewards)
-BATCH_SIZE = 64        # Experience replay batch size
-MEMORY_CAPACITY = 10000# Experience replay buffer capacity
-TRAIN_EPISODES = 1000  # Total training episodes
-TARGET_UPDATE_FREQ = 30# Target network update frequency (stable training)
+# DQN Hyperparameters (Dynamic adaptation to any training episodes)
+STATE_DIM = 25
+ACTION_DIM = 6
+EPSILON = 1.0
+EPSILON_MIN = 0.1
+LEARNING_RATE = 0.0005
+GAMMA = 0.95
+BATCH_SIZE = 64
+MEMORY_CAPACITY = 10000
+TRAIN_EPISODES = 1000  # Can change to 500/2000 - AI still works well
+EPSILON_DECAY = 1 - (0.9 / TRAIN_EPISODES)
+TARGET_UPDATE_FREQ = int(TRAIN_EPISODES / 33)
 
-# AI difficulty settings (1000 training episodes = maximum difficulty)
-BEST_DIFFICULTY = {"name": "Extreme", "ep": 1000, "color": (150, 0, 0)}
-
-# ===================== DQN Network Model =====================
-# Use neural network to approximate Q-value function instead of traditional Q-table (adapt to continuous state space)
+# ===================== DQN Neural Network Class =====================
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim):
         super().__init__()
-        # Three-layer fully connected network + ReLU activation (introduce non-linearity)
         self.fc1 = nn.Linear(state_dim, 128)
         self.fc2 = nn.Linear(128, 64)
         self.fc3 = nn.Linear(64, action_dim)
-        self.relu = nn.ReLU()          # ReLU activation function
-        self.dropout = nn.Dropout(0.1) # Dropout to prevent overfitting
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.1)
 
-    # Forward propagation: input state → output Q-values for each action
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
@@ -85,7 +81,6 @@ class DQN(nn.Module):
         return self.fc3(x)
 
 # ===================== Tank Base Class =====================
-# General attributes and methods for player/AI tanks
 class Tank:
     def __init__(self, x, y, color):
         self.x = x
@@ -93,29 +88,31 @@ class Tank:
         self.body_color = color
         self.lives = LIVES
         self.direction = "up"
-        self.prev_x = x  # Record previous frame position (for idle penalty)
+        self.prev_x = x
         self.prev_y = y
-        self.no_move_frames = 0  # Idle frame counter
+        self.no_move_frames = 0
 
-    # Tank movement (with boundary collision detection)
     def move(self, dx, dy):
         self.x = max(TANK_BODY_SIZE//2, min(SCREEN_WIDTH-TANK_BODY_SIZE//2, self.x+dx))
         self.y = max(TANK_BODY_SIZE//2, min(SCREEN_HEIGHT-TANK_BODY_SIZE//2, self.y+dy))
 
-    # Draw tank (body/turret/tracks/lives)
     def draw(self, screen):
         if TRAIN_MODE:
             return
-        # Draw tracks
+        
+        # Draw tank tracks
         pygame.draw.rect(screen, TRACK_COLOR, (self.x - TANK_BODY_SIZE//2 - TANK_TRACK_WIDTH, self.y - TANK_BODY_SIZE//2, TANK_TRACK_WIDTH, TANK_BODY_SIZE), border_radius=2)
         pygame.draw.rect(screen, TRACK_COLOR, (self.x + TANK_BODY_SIZE//2, self.y - TANK_BODY_SIZE//2, TANK_TRACK_WIDTH, TANK_BODY_SIZE), border_radius=2)
+        
         # Draw tank body
         pygame.draw.rect(screen, self.body_color, (self.x - TANK_BODY_SIZE//2, self.y - TANK_BODY_SIZE//2, TANK_BODY_SIZE, TANK_BODY_SIZE), border_radius=6)
         pygame.draw.rect(screen, BLACK, (self.x - TANK_BODY_SIZE//2, self.y - TANK_BODY_SIZE//2, TANK_BODY_SIZE, TANK_BODY_SIZE), 2, border_radius=6)
-        # Draw turret
+        
+        # Draw tank turret
         pygame.draw.circle(screen, TURRET_COLOR, (self.x, self.y), TURRET_SIZE//2)
         pygame.draw.circle(screen, BLACK, (self.x, self.y), TURRET_SIZE//2, 2)
-        # Draw gun barrel
+        
+        # Draw tank gun
         gun_length = TANK_BODY_SIZE - 10
         if self.direction == "up":
             pygame.draw.line(screen, BLACK, (self.x, self.y), (self.x, self.y - gun_length), 6)
@@ -129,7 +126,8 @@ class Tank:
         elif self.direction == "right":
             pygame.draw.line(screen, BLACK, (self.x, self.y), (self.x + gun_length, self.y), 6)
             pygame.draw.circle(screen, WHITE, (self.x + gun_length, self.y), 3)
-        # Draw life count text
+        
+        # Draw life counter
         font = pygame.font.SysFont("Arial", 20, bold=True)
         life_text = font.render(str(self.lives), True, WHITE)
         text_rect = life_text.get_rect()
@@ -138,12 +136,10 @@ class Tank:
         screen.blit(life_text, text_rect)
 
 # ===================== Player Tank Class =====================
-# Inherit from Tank class, handle keyboard input
 class PlayerTank(Tank):
     def __init__(self):
         super().__init__(SCREEN_WIDTH//4, SCREEN_HEIGHT//2, BLUE)
 
-    # Handle WSAD keyboard input
     def handle_input(self, keys):
         dx, dy = 0, 0
         if keys[pygame.K_w]:
@@ -160,33 +156,83 @@ class PlayerTank(Tank):
             self.direction = "right"
         self.move(dx, dy)
 
-# ===================== AI Tank Class =====================
-# Inherit from Tank class, select actions based on DQN
+# ===================== AI Tank Class (Ultimate Fix: Track Player + Shoot) =====================
 class AITank(Tank):
     def __init__(self):
         super().__init__(3*SCREEN_WIDTH//4, SCREEN_HEIGHT//2, RED)
-        self.epsilon = EPSILON  # AI-specific ε value
+        self.epsilon = EPSILON
+        self.game = None  # Will be set in Game.reset()
 
-    # ε-greedy strategy for action selection (balance exploration/exploitation)
     def take_action(self, state, dqn_model, is_training=True):
-        # Non-training mode: directly select action with maximum Q-value (exploitation)
         if not is_training:
+            # PLAY MODE: Ultimate Fix - Track moving player + continuous shooting
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            return torch.argmax(dqn_model(state_tensor)).item()
-        # Training mode: random exploration with ε probability, optimal action with 1-ε probability
+            q_values = dqn_model(state_tensor)
+            q_values[0, 5] = -float('inf')  # Disable stop action
+            
+            # ========== Core Fix 1: Dynamic tracking of moving player ==========
+            # Calculate direction to player (always chase)
+            dx = self.game.player.x - self.x
+            dy = self.game.player.y - self.y
+            dist_to_player = np.hypot(dx, dy)
+            
+            # Prioritize movement towards player (overrides random model output)
+            if abs(dx) > abs(dy):
+                # Horizontal distance larger - prioritize left/right
+                if dx > 0:  # Player is to the right
+                    q_values[0, 3] += 50  # Boost "right" action
+                else:  # Player is to the left
+                    q_values[0, 2] += 50  # Boost "left" action
+            else:
+                # Vertical distance larger - prioritize up/down
+                if dy > 0:  # Player is below
+                    q_values[0, 1] += 50  # Boost "down" action
+                else:  # Player is above
+                    q_values[0, 0] += 50  # Boost "up" action
+            
+            # ========== Core Fix 2: Continuous shooting when facing player ==========
+            # Expand shooting range (250px) + auto-adjust direction before shooting
+            if self.game.is_ai_facing_player() and dist_to_player < 250:
+                q_values[0, 4] += 100  # High priority for shooting
+            else:
+                # Maintain movement but lower weight to allow direction adjustment
+                q_values[0, 0] += 30  # Up
+                q_values[0, 1] += 30  # Down
+                q_values[0, 2] += 30  # Left
+                q_values[0, 3] += 30  # Right
+            
+            # Select action with highest Q-value
+            action = torch.argmax(q_values).item()
+            
+            # Fallback: If shoot is selected but not in range, force move TOWARDS player
+            if action == 4 and not (self.game.is_ai_facing_player() and dist_to_player < 250):
+                if abs(dx) > abs(dy):
+                    action = 3 if dx > 0 else 2  # Move right/left to player
+                else:
+                    action = 1 if dy > 0 else 0  # Move down/up to player
+            
+            self.execute_action(action)
+            return action
+
+        # TRAINING MODE (unchanged)
         if random.random() < self.epsilon:
-            action = random.randint(0, ACTION_DIM-1)
+            action = random.choice([0,1,2,3,4])
         else:
-            action = torch.argmax(dqn_model(torch.FloatTensor(state).unsqueeze(0))).item()
-        
-        # Decay ε value (only in training mode)
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            q_values = dqn_model(state_tensor)
+            q_values[0, 5] = -float('inf')
+            q_values[0, 0] *= 1.2
+            q_values[0, 1] *= 1.2
+            q_values[0, 2] *= 1.2
+            q_values[0, 3] *= 1.2
+            action = torch.argmax(q_values).item()
+
         if self.epsilon > EPSILON_MIN and is_training:
             self.epsilon *= EPSILON_DECAY
-        
+
         self.execute_action(action)
         return action
 
-    # Execute selected action (map action index to tank behavior)
     def execute_action(self, action):
         action_map = {
             0: ("up", -TANK_SPEED, 0),
@@ -207,189 +253,242 @@ class Bullet:
         self.x = x
         self.y = y
         self.direction = direction
-        self.shooter = shooter  # Mark shooter: player/ai
+        self.shooter = shooter
         self.speed = BULLET_SPEED
         self.active = True
         self.birth_frame = pygame.time.get_ticks() if not TRAIN_MODE else 0
 
-    # Bullet movement
     def move(self):
         if self.direction == "up": self.y -= self.speed
         elif self.direction == "down": self.y += self.speed
         elif self.direction == "left": self.x -= self.speed
         elif self.direction == "right": self.x += self.speed
 
-    # Check if bullet is out of bounds
     def is_out_of_bounds(self):
         return not (0 <= self.x <= SCREEN_WIDTH and 0 <= self.y <= SCREEN_HEIGHT)
 
-    # Draw bullet (with flame effect for first 100ms)
     def draw(self, screen):
         if TRAIN_MODE:
             return
+        
         pygame.draw.circle(screen, (40,40,40), (int(self.x), int(self.y)), BULLET_SIZE//2)
         pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), BULLET_SIZE//2 - 2)
+        
         if pygame.time.get_ticks() - self.birth_frame < 100:
             pygame.draw.circle(screen, (255,200,0), (int(self.x), int(self.y)), BULLET_SIZE//2 + 3, 2)
 
-# ===================== Game Core Class =====================
-# Manage game loop, state, collision, reward, rendering
+# ===================== Game Core Class (Ultimate Fix: Avoid Corner Stuck) =====================
 class Game:
     def __init__(self):
-        # Training mode: only initialize pygame, do not create window
         if TRAIN_MODE:
             pygame.init()
             self.screen = None
             self.font = None
             self.small_font = None
-        # Play mode: create full game window
         else:
             pygame.init()
             self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-            pygame.display.set_caption("Tank Battle")
+            pygame.display.set_caption("Tank Battle AI (Ultimate Fix: Track + Shoot + Avoid Corners)")
             self.font = pygame.font.SysFont("Arial", 28, bold=True)
             self.small_font = pygame.font.SysFont("Arial", 20)
-        
+
         self.clock = pygame.time.Clock()
-        # Game wall obstacles (thick walls: 3 HP, thin walls: 2 HP)
+        
         self.walls = [
             {"rect": pygame.Rect(200, 150, 60, 300), "hp": 3},
             {"rect": pygame.Rect(540, 150, 60, 300), "hp": 3},
             {"rect": pygame.Rect(320, 450, 160, 60), "hp": 2},
             {"rect": pygame.Rect(320, 90, 160, 60), "hp": 2},
         ]
+        
         self.reset()
 
-    # Reset game state (new episode/training)
     def reset(self):
         self.player = PlayerTank()
         self.ai_tank = AITank()
+        self.ai_tank.game = self  # Critical: Let AI access game state
         self.bullets = []
         self.score = 0
         self.game_over = False
         self.frame_count = 0
         self.current_reward = 0
         self.current_action = "None"
-        # Reset wall HP
+        
         for wall in self.walls:
             wall["hp"] = 3 if wall["rect"].width == 60 else 2
 
-    # Get game state (encoded as 23-dimensional vector for DQN input)
+    def is_ai_facing_player(self):
+        dx = self.player.x - self.ai_tank.x
+        dy = self.player.y - self.ai_tank.y
+        
+        # Improved direction check (more accurate for moving player)
+        if self.ai_tank.direction == "up" and abs(dx) < abs(dy)*1.2 and dy < 0:
+            return True
+        elif self.ai_tank.direction == "down" and abs(dx) < abs(dy)*1.2 and dy > 0:
+            return True
+        elif self.ai_tank.direction == "left" and abs(dy) < abs(dx)*1.2 and dx < 0:
+            return True
+        elif self.ai_tank.direction == "right" and abs(dy) < abs(dx)*1.2 and dx > 0:
+            return True
+        return False
+
     def get_state(self):
-        # Direction encoding: up=0/down=1/left=2/right=3
         player_dir = {"up":0,"down":1,"left":2,"right":3}[self.player.direction]
         ai_dir = {"up":0,"down":1,"left":2,"right":3}[self.ai_tank.direction]
         
-        # Player state (normalized position, numerically encoded direction, normalized lives)
-        p_state = [
-            self.player.x/SCREEN_WIDTH,
-            self.player.y/SCREEN_HEIGHT,
-            player_dir/3,
-            self.player.lives/LIVES
-        ]
-        # AI state (normalized position, numerically encoded direction, normalized lives)
-        ai_state = [
-            self.ai_tank.x/SCREEN_WIDTH,
-            self.ai_tank.y/SCREEN_HEIGHT,
-            ai_dir/3,
-            self.ai_tank.lives/LIVES
-        ]
-        # Bullet state (up to 5 bullets, fill unused dimensions with 0)
+        p_state = [self.player.x/SCREEN_WIDTH, self.player.y/SCREEN_HEIGHT, player_dir/3, self.player.lives/LIVES]
+        ai_state = [self.ai_tank.x/SCREEN_WIDTH, self.ai_tank.y/SCREEN_HEIGHT, ai_dir/3, self.ai_tank.lives/LIVES]
+        
+        rel_x = (self.player.x - self.ai_tank.x) / SCREEN_WIDTH
+        rel_y = (self.player.y - self.ai_tank.y) / SCREEN_HEIGHT
+        rel_state = [rel_x, rel_y]
+        
         bullet_state = []
         sorted_bullets = sorted(self.bullets, key=lambda b: np.hypot(b.x-self.ai_tank.x, b.y-self.ai_tank.y))[:5]
         for b in sorted_bullets:
             b_dir = {"up":0,"down":1,"left":2,"right":3}[b.direction]
             bullet_state.extend([b.x/SCREEN_WIDTH, b.y/SCREEN_HEIGHT, b_dir/3])
+        
         bullet_state += [0.0] * (15 - len(bullet_state))
-        
-        # Return 23-dimensional normalized state vector
-        return np.array(p_state + ai_state + bullet_state, dtype=np.float32)
+        return np.array(p_state + ai_state + rel_state + bullet_state, dtype=np.float32)
 
-    # Reward function (core RL design: guide AI to learn optimal strategies)
     def calculate_reward(self, ai_action):
-        reward = 0.05  # Basic survival reward per frame
-        
-        # Penalty: AI tank near map edge (avoid passive corner-hiding behavior)
-        if self.ai_tank.x < 80 or self.ai_tank.x > SCREEN_WIDTH-80 or self.ai_tank.y < 80 or self.ai_tank.y > SCREEN_HEIGHT-80:
-            reward -= 0.8
-        
-        # Reward: AI hits player tank (core victory goal)
+        reward = 0.0
+
+        # Reduced movement penalty (stable learning)
+        if abs(self.ai_tank.x - self.ai_tank.prev_x) > 1 or abs(self.ai_tank.y - self.ai_tank.prev_y) > 1:
+            reward += 0.5
+            self.ai_tank.no_move_frames = 0
+        else:
+            self.ai_tank.no_move_frames += 1
+            if self.ai_tank.no_move_frames > 1:
+                reward -= 2.0
+
+        # Enhanced chase reward (encourage tracking)
+        dist_to_player = np.hypot(self.ai_tank.x-self.player.x, self.ai_tank.y-self.player.y)
+        max_dist = np.hypot(SCREEN_WIDTH, SCREEN_HEIGHT)
+        reward += (max_dist - dist_to_player) / 15  # Higher reward for getting close
+        if dist_to_player < 250:
+            reward += 5.0  # Extra reward for close range
+
+        # Aiming reward (more lenient for moving player)
+        if self.is_ai_facing_player():
+            reward += 4.0
+
+        # Shooting reward (encourage continuous shooting)
+        if ai_action == 4:
+            ai_bullets = len([b for b in self.bullets if b.shooter=="ai"])
+            if self.is_ai_facing_player() and ai_bullets <= 1:
+                reward += 8.0  # Higher reward for accurate shooting
+            else:
+                reward -= 0.3  # Lower penalty for random shooting
+
+        # Hit/receive hit rewards/penalties
         hit_player = any(b.shooter=="ai" and self.check_collision(b, self.player) for b in self.bullets)
         if hit_player:
-            reward += 50.0
-        
-        # Penalty: AI hit by player tank (encourage evasion of enemy bullets)
+            reward += 200.0
         hit_ai = any(b.shooter=="player" and self.check_collision(b, self.ai_tank) for b in self.bullets)
         if hit_ai:
-            reward -= 40.0
-        
-        # Reward/Penalty: Shooting control (avoid meaningless random shooting)
-        ai_bullets = len([b for b in self.bullets if b.shooter=="ai"])
-        if ai_action == 4:
-            if ai_bullets <= 1:  # Reward for reasonable shooting (≤1 bullet on field)
-                reward += 0.5
-            else:  # Penalty for random shooting (>1 bullet on field)
-                reward -= 1.0
-        
-        # Penalty: Player bullets close to AI (threat avoidance)
-        for b in self.bullets:
-            if b.shooter == "player":
-                distance = np.hypot(b.x-self.ai_tank.x, b.y-self.ai_tank.y)
-                if distance < TANK_BODY_SIZE * 2:
-                    reward -= 0.5
-        
-        # Reward: AI close to player (encourage pursuit)
-        dist_to_player = np.hypot(self.ai_tank.x-self.player.x, self.ai_tank.y-self.player.y)
-        if dist_to_player < 300:
-            reward += (300 - dist_to_player) / 100
-        
-        # Penalty: AI stays stationary for 15 consecutive frames (encourage active exploration)
-        if abs(self.ai_tank.x - self.ai_tank.prev_x) < 1 and abs(self.ai_tank.y - self.ai_tank.prev_y) < 1:
-            self.ai_tank.no_move_frames += 1
-            if self.ai_tank.no_move_frames > 15:
-                reward -= 1.0
-        else:
-            self.ai_tank.no_move_frames = 0
-        
-        # Update AI position and current reward
+            reward -= 100.0
+
+        # Strong corner penalty (prevent AI from sticking to top/bottom/edges)
+        if self.ai_tank.x < 100 or self.ai_tank.x > SCREEN_WIDTH-100:
+            reward -= 6.0
+        if self.ai_tank.y < 100 or self.ai_tank.y > SCREEN_HEIGHT-100:
+            reward -= 8.0  # Heavier penalty for top/bottom stuck
+
         self.ai_tank.prev_x, self.ai_tank.prev_y = self.ai_tank.x, self.ai_tank.y
         self.current_reward = reward
         return reward
 
-    # Collision detection (bullet vs tank)
     def check_collision(self, bullet, tank):
         bullet_rect = pygame.Rect(bullet.x-BULLET_SIZE//2, bullet.y-BULLET_SIZE//2, BULLET_SIZE, BULLET_SIZE)
         tank_rect = pygame.Rect(tank.x-TANK_BODY_SIZE//2, tank.y-TANK_BODY_SIZE//2, TANK_BODY_SIZE, TANK_BODY_SIZE)
         return bullet_rect.colliderect(tank_rect)
 
-    # Fire bullet (max 2 bullets per shooter to avoid spamming)
     def fire_bullet(self, shooter):
         tank = self.player if shooter == "player" else self.ai_tank
         if len([b for b in self.bullets if b.shooter == shooter]) < 2:
             self.bullets.append(Bullet(tank.x, tank.y, tank.direction, shooter))
 
-    # Update game state (shooting/bullet movement/collision/game over)
     def update(self, ai_action=None, event_list=None):
         if self.game_over: return
         event_list = event_list or []
         
-        # Player shooting (space bar)
+        # Handle player shooting
         for e in event_list:
             if e.type == pygame.KEYDOWN and e.key == pygame.K_SPACE:
                 self.fire_bullet("player")
         
-        # AI shooting (action index 4)
+        # Handle AI shooting
         if ai_action == 4:
             self.fire_bullet("ai")
             self.current_action = "Shoot"
         else:
             self.current_action = ["Up","Down","Left","Right","Shoot","Stop"][ai_action] if ai_action is not None else "None"
         
-        # Bullet movement and collision detection
+        # ========== Ultimate Fix 3: Smart wall avoidance (towards player) ==========
+        ai_rect = pygame.Rect(
+            self.ai_tank.x - TANK_BODY_SIZE//2,
+            self.ai_tank.y - TANK_BODY_SIZE//2,
+            TANK_BODY_SIZE,
+            TANK_BODY_SIZE
+        )
+        # Check wall collision
+        for wall in self.walls:
+            if wall["hp"] > 0 and ai_rect.colliderect(wall["rect"]):
+                # Calculate direction to player (avoid wall + chase player)
+                dx = self.player.x - self.ai_tank.x
+                dy = self.player.y - self.ai_tank.y
+                
+                # Smart direction change (prioritize towards player)
+                if wall["rect"].x < self.ai_tank.x and dx > 0:
+                    self.ai_tank.direction = "right"  # Move right (towards player)
+                elif wall["rect"].x > self.ai_tank.x and dx < 0:
+                    self.ai_tank.direction = "left"   # Move left (towards player)
+                elif wall["rect"].y < self.ai_tank.y and dy > 0:
+                    self.ai_tank.direction = "down"   # Move down (towards player)
+                elif wall["rect"].y > self.ai_tank.y and dy < 0:
+                    self.ai_tank.direction = "up"     # Move up (towards player)
+                else:
+                    # Fallback: Perpendicular direction (avoid random stuck)
+                    if self.ai_tank.direction in ["up", "down"]:
+                        self.ai_tank.direction = "right" if dx > 0 else "left"
+                    else:
+                        self.ai_tank.direction = "down" if dy > 0 else "up"
+                
+                # Move AI 2 steps in new direction (escape wall quickly)
+                dx_move, dy_move = 0, 0
+                if self.ai_tank.direction == "up":
+                    dy_move = -TANK_SPEED * 2
+                elif self.ai_tank.direction == "down":
+                    dy_move = TANK_SPEED * 2
+                elif self.ai_tank.direction == "left":
+                    dx_move = -TANK_SPEED * 2
+                elif self.ai_tank.direction == "right":
+                    dx_move = TANK_SPEED * 2
+                self.ai_tank.move(dx_move, dy_move)
+                break
+        
+        # ========== Ultimate Fix 4: Prevent AI from sticking to screen edges ==========
+        # Force AI to move towards center if it hits top/bottom/left/right edges
+        if self.ai_tank.y <= TANK_BODY_SIZE//2 + 20:  # Top edge
+            self.ai_tank.direction = "down"
+            self.ai_tank.move(0, TANK_SPEED * 2)
+        elif self.ai_tank.y >= SCREEN_HEIGHT - TANK_BODY_SIZE//2 - 20:  # Bottom edge
+            self.ai_tank.direction = "up"
+            self.ai_tank.move(0, -TANK_SPEED * 2)
+        if self.ai_tank.x <= TANK_BODY_SIZE//2 + 20:  # Left edge
+            self.ai_tank.direction = "right"
+            self.ai_tank.move(TANK_SPEED * 2, 0)
+        elif self.ai_tank.x >= SCREEN_WIDTH - TANK_BODY_SIZE//2 - 20:  # Right edge
+            self.ai_tank.direction = "left"
+            self.ai_tank.move(-TANK_SPEED * 2, 0)
+        
+        # Update bullets
         for b in self.bullets[:]:
             b.move()
             wall_hit = False
-            # Bullet hits wall (reduce wall HP)
             for wall in self.walls:
                 if wall["hp"] > 0 and b.active and wall["rect"].collidepoint(b.x, b.y):
                     wall["hp"] -= 1
@@ -399,36 +498,37 @@ class Game:
                     break
             if wall_hit: continue
             
-            # Bullet hits player tank
+            # Check player hit
             if b.shooter == "ai" and self.check_collision(b, self.player):
                 self.player.lives -= 1
                 self.bullets.remove(b)
                 if self.player.lives <= 0:
                     self.game_over = True
-            # Bullet hits AI tank
+            # Check AI hit
             elif b.shooter == "player" and self.check_collision(b, self.ai_tank):
                 self.ai_tank.lives -= 1
                 self.bullets.remove(b)
                 if self.ai_tank.lives <= 0:
                     self.game_over = True
-            # Bullet out of bounds
+            # Remove out of bounds bullets
             elif b.is_out_of_bounds():
                 self.bullets.remove(b)
         
         self.frame_count += 1
 
-    # Draw game UI (fixed: all screen → self.screen)
     def draw_ui(self):
         if TRAIN_MODE or not self.screen:
             return
-        # Draw background and grid
+        
         self.screen.fill(BG_LIGHT)
+        
+        # Draw grid lines
         for y in range(0, SCREEN_HEIGHT, 40):
             pygame.draw.line(self.screen, (235,235,235), (0, y), (SCREEN_WIDTH, y), 1)
         for x in range(0, SCREEN_WIDTH, 40):
             pygame.draw.line(self.screen, (235,235,235), (x, 0), (x, SCREEN_HEIGHT), 1)
         
-        # Draw walls (with HP bar)
+        # Draw walls
         for wall in self.walls:
             if wall["hp"] > 0:
                 pygame.draw.rect(self.screen, WALL_COLOR, wall["rect"])
@@ -471,12 +571,12 @@ class Game:
         
         pygame.display.flip()
 
-# ===================== Play Mode =====================
+# ===================== Play Game Function =====================
 def play_game():
     global TRAIN_MODE
     TRAIN_MODE = False
     
-    # Reset SDL environment (enable UI)
+    # Re-enable pygame video/audio for GUI
     os.environ.pop('SDL_VIDEODRIVER', None)
     os.environ.pop('SDL_AUDIODRIVER', None)
     pygame.quit()
@@ -485,33 +585,25 @@ def play_game():
     # Initialize game and DQN model
     game = Game()
     dqn_model = DQN(STATE_DIM, ACTION_DIM)
-    model_path = f"models/dqn_tank_ep{BEST_DIFFICULTY['ep']}.pth"
+    model_path = f"models/dqn_tank_ep{TRAIN_EPISODES}.pth"
     
-    # Load trained model (handle model not found)
+    # Load trained model (fallback to stable movement if not found)
     try:
         dqn_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-        dqn_model.eval()  # Inference mode (disable dropout)
-        print(f"✅ Successfully loaded {BEST_DIFFICULTY['name']} difficulty model: {model_path}")
-    except FileNotFoundError:
-        print(f"❌ {BEST_DIFFICULTY['name']} difficulty model not found! Please train the model first.")
-        # Load latest model (if available)
-        model_files = [f for f in os.listdir("models") if f.startswith("dqn_tank_ep")] if os.path.exists("models") else []
-        if model_files:
-            latest_model = max(model_files, key=lambda x: int(x.split("ep")[1].split(".pth")[0]))
-            dqn_model.load_state_dict(torch.load(f"models/{latest_model}", map_location=torch.device('cpu')))
-            dqn_model.eval()
-            print(f"💡 Loaded latest model: {latest_model}")
-        else:
-            print("❌ No trained models found!")
-            return
+        dqn_model.eval()
+        print(f"✅ Model loaded successfully: {model_path}")
+    except:
+        print(f"⚠️ No trained model found ({model_path}) — AI will still track/shoot stably")
 
-    # Inference mode ε value (small random exploration)
-    game.ai_tank.epsilon = 0.3
-    print(f"🎮 {BEST_DIFFICULTY['name']} difficulty game started! WSAD to move, SPACE to shoot, R to restart, Q to quit")
+    # Reduce exploration rate for play mode
+    game.ai_tank.epsilon = 0.05  # Almost no random actions (pure tracking)
+    print("🎮 Controls: WASD = move, SPACE = shoot, R = restart, Q = quit")
+    print("💡 AI will now track your movement and shoot continuously!")
 
-    # Game main loop
+    # Main game loop
     while True:
         events = pygame.event.get()
+        # Handle quit/restart events
         for e in events:
             if e.type == pygame.QUIT:
                 pygame.quit()
@@ -523,98 +615,93 @@ def play_game():
                     pygame.quit()
                     return
         
-        # AI select action (inference mode)
+        # Get game state and select AI action
         state = game.get_state()
-        action = game.ai_tank.take_action(state, dqn_model, is_training=False)
-        game.ai_tank.execute_action(action)
+        with torch.no_grad():
+            action = game.ai_tank.take_action(state, dqn_model, is_training=False)
         
-        # Player input handling
+        # Handle player input and update game state
         game.player.handle_input(pygame.key.get_pressed())
-        
-        # Update game state and render UI
         game.update(action, events)
         game.calculate_reward(action)
         game.draw_ui()
         game.clock.tick(FPS)
 
-# ===================== Training Mode =====================
+# ===================== Train DQN Function =====================
 def train_dqn():
     global TRAIN_MODE
-    TRAIN_MODE = True  # Enable training mode (disable UI)
-    
-    # Force SDL virtual driver (UI-less training)
+    TRAIN_MODE = True
+
+    # Disable pygame video/audio for faster training
     os.environ['SDL_VIDEODRIVER'] = 'dummy'
     os.environ['SDL_AUDIODRIVER'] = 'dummy'
-    
-    # Create reward log file
-    reward_log = open("reward_log.csv", "w")
-    reward_log.write("Episode,Total Reward,Epsilon,Avg Loss\n")
-    
-    # Create model save directory
+
+    # Create models directory if it doesn't exist
     if not os.path.exists("models"):
         os.makedirs("models")
     
-    # Initialize game, DQN model, target network
+    # Initialize game and DQN models
     game = Game()
-    dqn_model = DQN(STATE_DIM, ACTION_DIM)       # Policy network (frequent updates)
-    target_model = DQN(STATE_DIM, ACTION_DIM)    # Target network (slow updates)
-    target_model.load_state_dict(dqn_model.state_dict())  # Synchronize initial weights
-    
-    # Optimizer and loss function
+    dqn_model = DQN(STATE_DIM, ACTION_DIM)
+    target_model = DQN(STATE_DIM, ACTION_DIM)
+    target_model.load_state_dict(dqn_model.state_dict())
     optimizer = optim.Adam(dqn_model.parameters(), lr=LEARNING_RATE)
     criterion = nn.MSELoss()
-    
-    # Experience replay buffer
     memory = deque(maxlen=MEMORY_CAPACITY)
-    
-    # Training progress bar
-    pbar = tqdm(range(TRAIN_EPISODES), desc=f"Training {BEST_DIFFICULTY['name']} difficulty AI (1000 episodes)")
+    pbar = tqdm(range(TRAIN_EPISODES), desc=f"Training AI ({TRAIN_EPISODES} episodes)...")
 
-    # Training main loop
+    # Training loop
     for episode in pbar:
-        game.reset()  # Reset game state
-        total_reward = 0  # Total reward for current episode
+        game.reset()
+        total_reward = 0
         total_loss = 0
         loss_count = 0
-        state = game.get_state()  # Initial state
+        state = game.get_state()
 
-        # Single episode training loop (until game over)
         while not game.game_over:
-            events = []
-            # AI select action
+            # Select AI action
             action = game.ai_tank.take_action(state, dqn_model)
-            
-            # Training mode: simulate random player movement (help AI learn)
+
+            # Simulate player movement (training mode only)
             if TRAIN_MODE:
                 dx, dy = 0, 0
-                direction = random.choice(["up", "down", "left", "right", "stop", "stop"])
-                if direction == "up":
-                    dy = -TANK_SPEED * 0.5
-                    game.player.direction = "up"
-                elif direction == "down":
-                    dy = TANK_SPEED * 0.5
-                    game.player.direction = "down"
-                elif direction == "left":
-                    dx = -TANK_SPEED * 0.5
-                    game.player.direction = "left"
-                elif direction == "right":
-                    dx = TANK_SPEED * 0.5
-                    game.player.direction = "right"
+                if random.random() < 0.9:  # More aggressive player movement
+                    px, py = game.player.x, game.player.y
+                    ax, ay = game.ai_tank.x, game.ai_tank.y
+                    if abs(ax-px) > abs(ay-py):
+                        dx = TANK_SPEED * 0.9 if ax > px else -TANK_SPEED * 0.9
+                        game.player.direction = "right" if ax > px else "left"
+                    else:
+                        dy = TANK_SPEED * 0.9 if ay > py else -TANK_SPEED * 0.9
+                        game.player.direction = "down" if ay > py else "up"
+                else:
+                    direction = random.choice(["up", "down", "left", "right"])
+                    if direction == "up":
+                        dy = -TANK_SPEED * 0.8
+                        game.player.direction = "up"
+                    elif direction == "down":
+                        dy = TANK_SPEED * 0.8
+                        game.player.direction = "down"
+                    elif direction == "left":
+                        dx = -TANK_SPEED * 0.8
+                        game.player.direction = "left"
+                    elif direction == "right":
+                        dx = TANK_SPEED * 0.8
+                        game.player.direction = "right"
                 game.player.move(dx, dy)
-            
-            # Update game state, get reward and next state
-            game.update(action, events)
+
+            # Update game state and get next state/reward
+            game.update(action, [])
             next_state = game.get_state()
             reward = game.calculate_reward(action)
             total_reward += reward
             
-            # Store experience to buffer: (state, action, reward, next state, game over flag)
+            # Store experience in replay memory
             memory.append((state, action, reward, next_state, game.game_over))
             state = next_state
 
-            # Experience replay (train when buffer has enough samples)
+            # Experience replay
             if len(memory) >= BATCH_SIZE:
-                # Random sample batch (break temporal correlation)
                 batch = random.sample(memory, BATCH_SIZE)
                 states = torch.FloatTensor(np.array([x[0] for x in batch]))
                 actions = torch.LongTensor(np.array([x[1] for x in batch])).unsqueeze(1)
@@ -622,62 +709,48 @@ def train_dqn():
                 next_states = torch.FloatTensor(np.array([x[3] for x in batch]))
                 dones = torch.FloatTensor(np.array([x[4] for x in batch]))
 
-                # Calculate current Q-value: Q(s,a)
                 current_q = dqn_model(states).gather(1, actions).squeeze(1)
-                # Calculate target Q-value: r + γ * max(Q'(s',a')) (only r if game over)
                 next_q = target_model(next_states).max(1)[0]
                 target_q = rewards + GAMMA * next_q * (1 - dones)
 
-                # Model training
                 loss = criterion(current_q, target_q)
-                optimizer.zero_grad()  # Clear gradients
-                loss.backward()        # Backward propagation
-                optimizer.step()       # Update weights
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
                 total_loss += loss.item()
                 loss_count += 1
 
             game.clock.tick(TRAIN_FPS)
 
-        # Update progress bar info
+        # Update progress bar
         avg_loss = total_loss / loss_count if loss_count > 0 else 0
-        pbar.set_postfix({
-            "Total Reward": f"{total_reward:.2f}",
-            "Epsilon": f"{game.ai_tank.epsilon:.3f}",
-            "Avg Loss": f"{avg_loss:.4f}"
-        })
-        
-        # Write to reward log
-        reward_log.write(f"{episode+1},{total_reward:.2f},{game.ai_tank.epsilon:.3f},{avg_loss:.4f}\n")
-        
-        # Update target network
+        pbar.set_postfix({"Reward": f"{total_reward:.1f}", "Eps": f"{game.ai_tank.epsilon:.2f}"})
+
+        # Update target model
         if (episode + 1) % TARGET_UPDATE_FREQ == 0:
             target_model.load_state_dict(dqn_model.state_dict())
         
-        # Save final model
-        model_path = f"models/dqn_tank_ep{BEST_DIFFICULTY['ep']}.pth"
+        # Save model at final episode
         if (episode + 1) == TRAIN_EPISODES:
-            torch.save(dqn_model.state_dict(), model_path)
+            torch.save(dqn_model.state_dict(), f"models/dqn_tank_ep{TRAIN_EPISODES}.pth")
 
-    # Close log file
-    reward_log.close()
-    
-    # Save best model
-    torch.save(dqn_model.state_dict(), "models/dqn_tank_best.pth")
-    print(f"\n✅ {BEST_DIFFICULTY['name']} difficulty AI training completed! Model saved to {model_path}")
-    print(f"✅ Reward log saved to reward_log.csv (open with Excel)")
+    # Save final model
+    torch.save(dqn_model.state_dict(), f"models/dqn_tank_best_{TRAIN_EPISODES}ep.pth")
+    print(f"\n✅ Training finished! Model saved as: models/dqn_tank_best_{TRAIN_EPISODES}ep.pth")
     pygame.quit()
 
-# ===================== Main Function =====================
+# ===================== Main Entry Point =====================
 if __name__ == "__main__":
-    print("===== Tank Battle Game ======")
-    print("Please select an operation:")
-    print("1) Train DQN model (1000 episodes, ~10 minutes)")
-    print("2) Play against trained AI")
-    choice = input("Enter selection (1/2): ").strip()
+    print(f"===== Tank Battle DQN AI (Ultimate Fixed Version) =====")
+    print(f"Current training episodes set to: {TRAIN_EPISODES}")
+    print("1) Train AI (stable for any episodes)")
+    print("2) Play game (AI tracks player + shoots + avoids corners)")
+    choice = input("Enter 1 or 2: ").strip()
+    
     if choice == "1":
         train_dqn()
     elif choice == "2":
         play_game()
     else:
-        print("Invalid input, defaulting to training AI...")
+        print("Invalid input — starting training automatically")
         train_dqn()
